@@ -28,7 +28,7 @@ echo "Vlasnik racuna je: ".$racun->vlasnik ."\n";
 
 //uplata novaca
 $racun->uplati(1000);
-$racun->uplati(500);
+$racun->uplati(1500);
 
 echo "Stanje na računu: ". $racun->getStanje() ."\n";
 
