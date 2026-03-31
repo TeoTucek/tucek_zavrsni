@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test rezervacije</title>
+</head>
+<body>
+    <h2>Test forma - direktno slanje</h2>
+    
+    <form method="POST" action="spremi.php">
+        <!-- CSRF TOKEN - OVO JE VAŽNO! -->
+        <input type="hidden" name="csrf_token" value="<?php 
+            session_start();
+            if (empty($_SESSION['csrf_token'])) {
+                $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+            }
+            echo $_SESSION['csrf_token']; 
+        ?>">
+        
+        <label>Lokacija:</label>
+        <select name="id_lokacije">
+            <option value="1">Pozicija 1</option>
+            <option value="2">Pozicija 2</option>
+        </select><br><br>
+        
+        <label>Tip ulaznice:</label>
+        <select name="id_tipa_ulaznice">
+            <option value="1">R23 - 13.90€</option>
+            <option value="2">R23 PLUS - 17.50€</option>
+        </select><br><br>
+        
+        <label>Datum:</label>
+        <input type="date" name="datum" value="2025-04-01"><br><br>
+        
+        <label>Ime:</label>
+        <input type="text" name="ime" value="Test Korisnik"><br><br>
+        
+        <label>Mobitel:</label>
+        <input type="text" name="mobitel" value="0912345678"><br><br>
+        
+        <label>Email:</label>
+        <input type="email" name="email" value="test@test.com"><br><br>
+        
+        <label>Broj osoba:</label>
+        <input type="number" name="broj_osoba" value="2"><br><br>
+        
+        <button type="submit">REZERVIRAJ</button>
+    </form>
+</body>
+</html>

@@ -1,0 +1,2 @@
+2026-03-31 13:55:06 - Greška: SMTP Error: Could not authenticate.
+2026-03-31 13:58:44 - Greška: SMTP Error: Could not authenticate.

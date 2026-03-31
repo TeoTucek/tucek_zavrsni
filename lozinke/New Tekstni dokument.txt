@@ -1,0 +1,9 @@
+Email: admin@ribnjacstvo.hr
+
+Lozinka: admin123
+
+
+ $tvoj_email = "rezervacije.koncanica@gmail.com";  
+
+ $tvoja_lozinka = "hods lnmv pear yjbw";             
+        
