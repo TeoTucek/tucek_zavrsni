@@ -53,7 +53,7 @@ if ($id_paketa_nocni) {
     }
 }
 
-// Dohvati dodatne usluge
+// Dohvati dodatne usluge (samo za email, ne sprema se ovdje)
 $usluge_lista = [];
 $cijena_usluge = 0;
 $usluge = $mysqli->query("SELECT * FROM dodatne_usluge WHERE aktivan = 1");
@@ -94,11 +94,27 @@ $stmt->bind_param("issssids",
 if ($stmt->execute()) {
     $id_rezervacije = $mysqli->insert_id;
     
+    // ===== ===== ===== ===== ===== ===== ===== ===== =====
+    // ===== SPREMANJE DODATNIH USLUGA U BAZU =====
+    // ===== ===== ===== ===== ===== ===== ===== ===== =====
+    
+    $usluge = $mysqli->query("SELECT * FROM dodatne_usluge WHERE aktivan = 1");
+    if ($usluge) {
+        while ($u = $usluge->fetch_assoc()) {
+            $kolicina = isset($_POST['usluga_' . $u['id_usluge']]) ? (int)$_POST['usluga_' . $u['id_usluge']] : 0;
+            if ($kolicina > 0) {
+                $stmt_usluge = $mysqli->prepare("INSERT INTO stavke_usluga (id_rezervacije, id_usluge, kolicina, cijena_po_komadu) VALUES (?, ?, ?, ?)");
+                $stmt_usluge->bind_param("iiid", $id_rezervacije, $u['id_usluge'], $kolicina, $u['cijena']);
+                $stmt_usluge->execute();
+            }
+        }
+    }
+    
     // ===== SLANJE EMAILA =====
     if (!empty($email)) {
         
-        $tvoj_email = "rezervacije.koncanica@gmail.com";  // TVOJ EMAIL
-        $tvoja_lozinka = "hods lnmv pear yjbw";             // APP LOZINKA (bez razmaka!)
+        $tvoj_email = "rezervacije.koncanica@gmail.com";
+        $tvoja_lozinka = "hodslnmvpearyjbw";  // BEZ RAZMAKA!
         
         $mail = new PHPMailer(true);
         
@@ -115,7 +131,7 @@ if ($stmt->execute()) {
             $mail->addAddress($email, $ime);
             
             $mail->isHTML(true);
-            $mail->Subject = " Potvrda rezervacije - Ribnjacarstvo Koncanica";
+            $mail->Subject = "🎣 Potvrda rezervacije - Ribnjacarstvo Koncanica";
             
             $mail->Body = "
             <html>
@@ -164,7 +180,7 @@ if ($stmt->execute()) {
                             Radno vrijeme: Pon - Ned: 06:00 - 20:00
                         </div>
                         
-                        <p> <strong>Bistro!</strong>🎣</p>
+                        <p>🎣 <strong>Sretan ribolov!</strong></p>
                         <p>Ribnjačarstvo Končanica d.d.</p>
                     </div>
                     <div style='text-align: center; font-size: 12px; color: #666; padding: 20px;'>
@@ -180,7 +196,7 @@ if ($stmt->execute()) {
             $mail->send();
             
         } catch (Exception $e) {
-            // Ako email ne prođe, spremi u datoteku (za svaki slučaj)
+            // Ako email ne prođe, spremi u datoteku
             $folder = "email_potvrde/";
             if (!file_exists($folder)) mkdir($folder, 0777, true);
             file_put_contents($folder . "rezervacija_" . $id_rezervacije . ".html", $mail->Body);

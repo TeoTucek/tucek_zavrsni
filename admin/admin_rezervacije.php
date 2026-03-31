@@ -18,10 +18,8 @@ require_once '../src/Exception.php';
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\Exception;
 
-// ===== FUNKCIJA ZA SLANJE EMAILA NAKON POTVRDE =====
-function posaljiEmailPotvrda($mysqli, $id_rezervacije, $status) {
-    // NE STAVLJAJ USE OVDJE! Već je na vrhu!
-    
+// ===== FUNKCIJA ZA SLANJE EMAILA NAKON POTVRDE (SA RAZLOGOM) =====
+function posaljiEmailPotvrda($mysqli, $id_rezervacije, $status, $razlog = '') {
     // Dohvati podatke o rezervaciji
     $rez = $mysqli->query("
         SELECT r.*, l.naziv AS lokacija 
@@ -31,13 +29,11 @@ function posaljiEmailPotvrda($mysqli, $id_rezervacije, $status) {
     ");
     
     if (!$rez || $rez->num_rows == 0) {
-        error_log("Rezervacija $id_rezervacije ne postoji");
         return false;
     }
     $r = $rez->fetch_assoc();
     
     if (empty($r['email'])) {
-        error_log("Rezervacija $id_rezervacije nema email");
         return false;
     }
     
@@ -50,7 +46,15 @@ function posaljiEmailPotvrda($mysqli, $id_rezervacije, $status) {
         }
     }
     
-    $ukupno = $r['broj_osoba'] * $r['cijena_po_osobi'];
+    // Dohvati dodatne usluge za ukupnu cijenu u emailu
+    $usluge_sql = $mysqli->query("SELECT SUM(kolicina * cijena_po_komadu) as ukupno FROM stavke_usluga WHERE id_rezervacije = $id_rezervacije");
+    $ukupno_usluge = 0;
+    if ($usluge_sql && $usluge_sql->num_rows > 0) {
+        $usluge_row = $usluge_sql->fetch_assoc();
+        $ukupno_usluge = $usluge_row['ukupno'] ?? 0;
+    }
+    
+    $ukupno = ($r['broj_osoba'] * $r['cijena_po_osobi']) + $ukupno_usluge;
     
     if ($status == 'potvrđeno') {
         $subject = "✅ REZERVACIJA POTVRĐENA - Ribnjačarstvo Končanica";
@@ -58,12 +62,24 @@ function posaljiEmailPotvrda($mysqli, $id_rezervacije, $status) {
         $poruka_status = "POTVRĐENA";
         $tekst = "Vaša rezervacija je potvrđena! Veselimo se vašem dolasku.";
         $dodatno = "<p><strong>📌 Napomena:</strong> Molimo vas da dođete 15 minuta prije termina.</p>";
+        $razlog_html = "";
     } else {
         $subject = "❌ REZERVACIJA OTKAZANA - Ribnjačarstvo Končanica";
         $boja = "#e74c3c";
         $poruka_status = "OTKAZANA";
-        $tekst = "Vaša rezervacija je otkazana. Za više informacija kontaktirajte nas.";
+        $tekst = "Vaša rezervacija je otkazana.";
         $dodatno = "";
+        
+        // DODAJ RAZLOG AKO POSTOJI
+        if (!empty($razlog)) {
+            $razlog_html = "
+            <div style='background: #f8d7da; padding: 15px; border-radius: 10px; margin: 15px 0; border-left: 4px solid #e74c3c;'>
+                <strong>📝 Razlog otkazivanja:</strong><br>
+                " . htmlspecialchars($razlog) . "
+            </div>";
+        } else {
+            $razlog_html = "";
+        }
     }
     
     $message = "
@@ -94,6 +110,8 @@ function posaljiEmailPotvrda($mysqli, $id_rezervacije, $status) {
                     STATUS: $poruka_status
                 </div>
                 
+                $razlog_html
+                
                 <div class='details'>
                     <h4>📋 Detalji rezervacije:</h4>
                     <p><strong>Broj rezervacije:</strong> #{$r['id_rezervacije']}</p>
@@ -123,7 +141,7 @@ function posaljiEmailPotvrda($mysqli, $id_rezervacije, $status) {
     
     // Postavke za Gmail
     $tvoj_email = "rezervacije.koncanica@gmail.com";
-    $tvoja_lozinka = "pcwespeotgqcfeqm";
+    $tvoja_lozinka = "hodslnmvpearyjbw";
     
     $mail = new PHPMailer(true);
     
@@ -182,6 +200,12 @@ if (isset($_GET['promijeni']) && isset($_GET['id']) && isset($_GET['status'])) {
     $status = $_GET['status'];
     $admin = $_SESSION['admin_ime'];
     
+    // DOHVATI RAZLOG AKO POSTOJI
+    $razlog = '';
+    if ($status == 'otkazano' && isset($_GET['razlog'])) {
+        $razlog = trim($_GET['razlog']);
+    }
+    
     $old = $mysqli->query("SELECT status FROM rezervacije WHERE id_rezervacije = $id");
     $stari_status = $old->fetch_assoc()['status'];
     
@@ -194,11 +218,10 @@ if (isset($_GET['promijeni']) && isset($_GET['id']) && isset($_GET['status'])) {
     $stmt2->bind_param("isss", $id, $stari_status, $status, $admin);
     $stmt2->execute();
     
-    // ===== OVO JE KLJUČNO - POŠALJI EMAIL =====
+    // POŠALJI EMAIL - PROSLIJEDI RAZLOG!
     if ($status == 'potvrđeno' || $status == 'otkazano') {
-        posaljiEmailPotvrda($mysqli, $id, $status);
+        posaljiEmailPotvrda($mysqli, $id, $status, $razlog);
     }
-    // =========================================
     
     header("Location: admin_rezervacije.php" . (isset($_GET['return_filters']) ? $_GET['return_filters'] : ''));
     exit();
@@ -615,7 +638,16 @@ function keepFilters() {
                             <td colspan="10">📭 Nema rezervacija za prikaz</td>
                         </tr>
                     <?php else: ?>
-                        <?php while ($r = $rezervacije->fetch_assoc()): ?>
+                        <?php while ($r = $rezervacije->fetch_assoc()): 
+                            // Dohvati dodatne usluge za UKUPNU CIJENU
+                            $usluge_sql = $mysqli->query("SELECT SUM(kolicina * cijena_po_komadu) as ukupno FROM stavke_usluga WHERE id_rezervacije = " . $r['id_rezervacije']);
+                            $ukupno_usluge = 0;
+                            if ($usluge_sql && $usluge_sql->num_rows > 0) {
+                                $usluge_row = $usluge_sql->fetch_assoc();
+                                $ukupno_usluge = $usluge_row['ukupno'] ?? 0;
+                            }
+                            $ukupna_cijena = ($r['broj_osoba'] * $r['cijena_po_osobi']) + $ukupno_usluge;
+                        ?>
                         <tr>
                             <td>#<?php echo $r['id_rezervacije']; ?></td>
                             <td><?php echo date('d.m.Y.', strtotime($r['datum_rezervacije'])); ?></td>
@@ -624,7 +656,7 @@ function keepFilters() {
                             <td><?php echo $r['broj_mobitela']; ?></td>
                             <td><?php echo $r['email'] ?: '-'; ?></td>
                             <td><?php echo $r['broj_osoba']; ?></td>
-                            <td><?php echo number_format($r['broj_osoba'] * $r['cijena_po_osobi'], 2); ?> €</td>
+                            <td><strong><?php echo number_format($ukupna_cijena, 2); ?> €</strong></td>
                             <td>
                                 <span class="status-badge status-<?php 
                                     echo $r['status'] == 'na čekanju' ? 'cekanju' : 
@@ -639,8 +671,9 @@ function keepFilters() {
                                        class="btn-approve" onclick="return confirm('Potvrdi rezervaciju #<?php echo $r['id_rezervacije']; ?>?')">
                                        ✅ Potvrdi
                                     </a>
-                                    <a href="?promijeni=1&id=<?php echo $r['id_rezervacije']; ?>&status=otkazano<?php echo keepFilters(); ?>" 
-                                       class="btn-cancel" onclick="return confirm('Otkaži rezervaciju #<?php echo $r['id_rezervacije']; ?>?')">
+                                    <a href="javascript:void(0);" 
+                                       class="btn-cancel" 
+                                       onclick="otkaziRezervaciju(<?php echo $r['id_rezervacije']; ?>, '<?php echo addslashes($r['ime_prezime']); ?>')">
                                        ❌ Otkaži
                                     </a>
                                 <?php endif; ?>
@@ -661,5 +694,17 @@ function keepFilters() {
             </table>
         </div>
     </div>
+    
+    <script>
+    function otkaziRezervaciju(id, ime) {
+        var razlog = prompt("❌ Otkazivanje rezervacije #" + id + "\nKorisnik: " + ime + "\n\nUnesite razlog otkazivanja:");
+        
+        if (razlog !== null && razlog.trim() !== "") {
+            window.location.href = "?promijeni=1&id=" + id + "&status=otkazano&razlog=" + encodeURIComponent(razlog) + "<?php echo keepFilters(); ?>";
+        } else if (razlog !== null) {
+            alert("Morate unijeti razlog otkazivanja!");
+        }
+    }
+    </script>
 </body>
 </html>
