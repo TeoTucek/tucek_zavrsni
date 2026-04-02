@@ -209,8 +209,14 @@ if (isset($_GET['promijeni']) && isset($_GET['id']) && isset($_GET['status'])) {
     $old = $mysqli->query("SELECT status FROM rezervacije WHERE id_rezervacije = $id");
     $stari_status = $old->fetch_assoc()['status'];
     
-    $stmt = $mysqli->prepare("UPDATE rezervacije SET status = ? WHERE id_rezervacije = ?");
-    $stmt->bind_param("si", $status, $id);
+    // AŽURIRAJ STATUS I RAZLOG (ako je otkazano)
+    if ($status == 'otkazano') {
+        $stmt = $mysqli->prepare("UPDATE rezervacije SET status = ?, razlog_otkazivanja = ? WHERE id_rezervacije = ?");
+        $stmt->bind_param("ssi", $status, $razlog, $id);
+    } else {
+        $stmt = $mysqli->prepare("UPDATE rezervacije SET status = ? WHERE id_rezervacije = ?");
+        $stmt->bind_param("si", $status, $id);
+    }
     $stmt->execute();
     
     $stmt2 = $mysqli->prepare("INSERT INTO povijest_statusa (id_rezervacije, stari_status, novi_status, promijenio) 
@@ -236,8 +242,8 @@ $filter_datum_do = isset($_GET['datum_do']) ? $_GET['datum_do'] : '';
 // Dohvati sve lokacije za filter
 $sve_lokacije = $mysqli->query("SELECT id_lokacije, naziv FROM lokacije WHERE aktivno = 1 ORDER BY naziv");
 
-// Gradi SQL upit s filterima
-$sql = "SELECT r.*, l.naziv AS lokacija_naziv 
+// Gradi SQL upit s filterima - DODAJ razlog_otkazivanja
+$sql = "SELECT r.*, l.naziv AS lokacija_naziv, r.razlog_otkazivanja
         FROM rezervacije r
         JOIN lokacije l ON r.id_lokacije = l.id_lokacije
         WHERE 1=1";
@@ -500,6 +506,57 @@ function keepFilters() {
         .status-cekanju { background: #fff3cd; color: #856404; }
         .status-potvrdeno { background: #d4edda; color: #155724; }
         .status-otkazano { background: #f8d7da; color: #721c24; }
+        
+        /* Tooltip za razlog otkazivanja */
+        .status-cell {
+            position: relative;
+            cursor: pointer;
+        }
+        
+        .status-cell .tooltip-text {
+            visibility: hidden;
+            background-color: #2c3e50;
+            color: #fff;
+            text-align: center;
+            border-radius: 6px;
+            padding: 8px 12px;
+            position: absolute;
+            z-index: 100;
+            bottom: 125%;
+            left: 50%;
+            transform: translateX(-50%);
+            white-space: nowrap;
+            font-size: 12px;
+            font-weight: normal;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+            opacity: 0;
+            transition: opacity 0.3s;
+            pointer-events: none;
+        }
+        
+        .status-cell .tooltip-text::after {
+            content: "";
+            position: absolute;
+            top: 100%;
+            left: 50%;
+            margin-left: -5px;
+            border-width: 5px;
+            border-style: solid;
+            border-color: #2c3e50 transparent transparent transparent;
+        }
+        
+        .status-cell:hover .tooltip-text {
+            visibility: visible;
+            opacity: 1;
+        }
+        
+        /* Ako je otkazano, dodatni stil */
+        .status-otkazano {
+            position: relative;
+            cursor: help;
+            border-bottom: 1px dotted #e74c3c;
+        }
+        
         .action-buttons {
             display: flex;
             gap: 8px;
@@ -630,8 +687,7 @@ function keepFilters() {
                         <th>Cijena</th>
                         <th>Status</th>
                         <th>Akcije</th>
-                    </tr>
-                </thead>
+                     </thead>
                 <tbody>
                     <?php if (!$rezervacije || $rezervacije->num_rows == 0): ?>
                         <tr class="empty-row">
@@ -657,13 +713,18 @@ function keepFilters() {
                             <td><?php echo $r['email'] ?: '-'; ?></td>
                             <td><?php echo $r['broj_osoba']; ?></td>
                             <td><strong><?php echo number_format($ukupna_cijena, 2); ?> €</strong></td>
-                            <td>
+                            <td class="status-cell">
                                 <span class="status-badge status-<?php 
                                     echo $r['status'] == 'na čekanju' ? 'cekanju' : 
                                         ($r['status'] == 'potvrđeno' ? 'potvrdeno' : 'otkazano'); 
                                 ?>">
                                     <?php echo $r['status']; ?>
                                 </span>
+                                <?php if ($r['status'] == 'otkazano' && !empty($r['razlog_otkazivanja'])): ?>
+                                    <span class="tooltip-text">
+                                        📝 <strong>Razlog:</strong> <?php echo htmlspecialchars($r['razlog_otkazivanja']); ?>
+                                    </span>
+                                <?php endif; ?>
                             </td>
                             <td class="action-buttons">
                                 <?php if ($r['status'] == 'na čekanju'): ?>

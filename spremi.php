@@ -9,6 +9,18 @@ require 'src/Exception.php';
 
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\Exception;
+if (
+    empty($_POST['id_lokacije']) ||
+    empty($_POST['id_tipa_ulaznice']) ||
+    empty($_POST['datum']) ||
+    empty($_POST['ime']) ||
+    empty($_POST['mobitel']) ||
+    empty($_POST['email']) ||
+    empty($_POST['broj_osoba'])
+) {
+    header("Location: index.php?status=greska");
+    exit();
+}
 
 // CSRF provjera
 if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
