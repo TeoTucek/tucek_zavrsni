@@ -103,7 +103,7 @@ while ($row = $blokirani->fetch_assoc()) {
             <nav>
                 <ul>
                     <li><a href="index.php" class="active">Rezervacija</a></li>
-                    <li><a href="admin/admin_login.php">Admin</a></li>
+                    <li><a href="admin/admin__login.php">Admin</a></li>
                 </ul>
             </nav>
         </div>
