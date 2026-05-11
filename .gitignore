@@ -1,0 +1,19 @@
+# Tajne i lokalne konfiguracije
+config.php
+lozinke/
+*.local.php
+
+# Logovi
+email_log.txt
+email_error.txt
+email_potvrde/
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store

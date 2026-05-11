@@ -9,7 +9,8 @@ if (empty($_SESSION['csrf_token'])) {
 $poruka = '';
 if (isset($_GET['status'])) {
     if ($_GET['status'] == 'uspjeh') {
-        $poruka = '<div class="alert success">✅ Rezervacija uspješna! ID: #' . $_GET['id'] . '</div>';
+        $id_prikaz = isset($_GET['id']) ? (int)$_GET['id'] : 0;
+        $poruka = '<div class="alert success">✅ Rezervacija uspješna! ID: #' . $id_prikaz . '</div>';
     } else if ($_GET['status'] == 'zauzeto') {
         $poruka = '<div class="alert error">❌ Termin je zauzet! Odaberi drugi datum.</div>';
     } else if ($_GET['status'] == 'blokirano') {

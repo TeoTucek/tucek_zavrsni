@@ -1,14 +1,25 @@
 <?php
 session_start();
 if (!isset($_SESSION['admin_id'])) {
-    header("Location: admin_login.php");
+    header("Location: admin__login.php");
     exit();
 }
 require_once '../spoji.php';
 
-// Omogući prikaz grešaka (za debug)
-error_reporting(E_ALL);
-ini_set('display_errors', 1);
+// CSRF token za admin akcije
+if (empty($_SESSION['admin_csrf'])) {
+    $_SESSION['admin_csrf'] = bin2hex(random_bytes(32));
+}
+$admin_csrf = $_SESSION['admin_csrf'];
+
+// Pomoćna funkcija - provjerava CSRF token pri svakoj izmjeni
+function provjeriCSRF() {
+    $token = $_POST['csrf_token'] ?? $_GET['csrf_token'] ?? '';
+    if (!hash_equals($_SESSION['admin_csrf'] ?? '', $token)) {
+        http_response_code(403);
+        die('CSRF token nevažeći. Vrati se na <a href="admin_rezervacije.php">pregled</a>.');
+    }
+}
 
 // ===== UKLJUČI PHPMailer NA VRHU =====
 require_once '../src/PHPMailer.php';
@@ -53,8 +64,20 @@ function posaljiEmailPotvrda($mysqli, $id_rezervacije, $status, $razlog = '') {
         $usluge_row = $usluge_sql->fetch_assoc();
         $ukupno_usluge = $usluge_row['ukupno'] ?? 0;
     }
-    
-    $ukupno = ($r['broj_osoba'] * $r['cijena_po_osobi']) + $ukupno_usluge;
+
+    // Dohvati cijenu noćnog ribolova (ako postoji)
+    $cijena_nocni = 0;
+    $nocni_naziv = '';
+    if (!empty($r['id_paketa_nocni'])) {
+        $noc = $mysqli->query("SELECT naziv, cijena FROM nocni_ribolov WHERE id_paketa = " . (int)$r['id_paketa_nocni']);
+        if ($noc && $noc->num_rows > 0) {
+            $noc_row = $noc->fetch_assoc();
+            $cijena_nocni = $noc_row['cijena'];
+            $nocni_naziv = $noc_row['naziv'];
+        }
+    }
+
+    $ukupno = ($r['broj_osoba'] * $r['cijena_po_osobi']) + $cijena_nocni + $ukupno_usluge;
     
     if ($status == 'potvrđeno') {
         $subject = "✅ REZERVACIJA POTVRĐENA - Ribnjačarstvo Končanica";
@@ -118,8 +141,9 @@ function posaljiEmailPotvrda($mysqli, $id_rezervacije, $status, $razlog = '') {
                     <p><strong>📅 Datum:</strong> " . date('d.m.Y.', strtotime($r['datum_rezervacije'])) . "</p>
                     <p><strong>📍 Lokacija:</strong> {$r['lokacija']}</p>
                     <p><strong>🎫 Tip ulaznice:</strong> $naziv_tipa</p>
-                    <p><strong>👥 Broj osoba:</strong> {$r['broj_osoba']}</p>
-                    <p><strong>💰 Ukupno za platiti:</strong> " . number_format($ukupno, 2) . " €</p>
+                    <p><strong>👥 Broj osoba:</strong> {$r['broj_osoba']}</p>"
+                    . ($nocni_naziv ? "<p><strong>🌙 Noćni ribolov:</strong> " . htmlspecialchars($nocni_naziv) . " (" . number_format($cijena_nocni, 2) . " €)</p>" : "") .
+                    "<p><strong>💰 Ukupno za platiti:</strong> " . number_format($ukupno, 2) . " €</p>
                 </div>
                 
                 $dodatno
@@ -139,22 +163,18 @@ function posaljiEmailPotvrda($mysqli, $id_rezervacije, $status, $razlog = '') {
     </html>
     ";
     
-    // Postavke za Gmail
-    $tvoj_email = "rezervacije.koncanica@gmail.com";
-    $tvoja_lozinka = "hodslnmvpearyjbw";
-    
     $mail = new PHPMailer(true);
-    
+
     try {
         $mail->isSMTP();
-        $mail->Host = 'smtp.gmail.com';
+        $mail->Host = SMTP_HOST;
         $mail->SMTPAuth = true;
-        $mail->Username = $tvoj_email;
-        $mail->Password = $tvoja_lozinka;
+        $mail->Username = SMTP_USER;
+        $mail->Password = SMTP_PASS;
         $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
-        $mail->Port = 587;
-        
-        $mail->setFrom($tvoj_email, 'Ribnjačarstvo Končanica');
+        $mail->Port = SMTP_PORT;
+
+        $mail->setFrom(SMTP_USER, SMTP_FROM_NAME);
         $mail->addAddress($r['email'], $r['ime_prezime']);
         
         $mail->isHTML(true);
@@ -176,34 +196,52 @@ function posaljiEmailPotvrda($mysqli, $id_rezervacije, $status, $razlog = '') {
 }
 
 // ===== BRISANJE REZERVACIJE =====
-if (isset($_GET['obrisi'])) {
-    $id = (int)$_GET['obrisi'];
-    
-    $mysqli->query("SET FOREIGN_KEY_CHECKS = 0");
-    $mysqli->query("DELETE FROM povijest_statusa WHERE id_rezervacije = $id");
-    $mysqli->query("DELETE FROM stavke_usluga WHERE id_rezervacije = $id");
-    $mysqli->query("DELETE FROM stavke_mamci WHERE id_rezervacije = $id");
-    $result = $mysqli->query("DELETE FROM rezervacije WHERE id_rezervacije = $id");
-    $mysqli->query("SET FOREIGN_KEY_CHECKS = 1");
-    
+if (isset($_POST['obrisi'])) {
+    provjeriCSRF();
+    $id = (int)$_POST['obrisi'];
+
+    // Brisanje pravim redoslijedom - FK constrainti se poštuju
+    $stmt = $mysqli->prepare("DELETE FROM povijest_statusa WHERE id_rezervacije = ?");
+    $stmt->bind_param("i", $id);
+    $stmt->execute();
+
+    $stmt = $mysqli->prepare("DELETE FROM stavke_usluga WHERE id_rezervacije = ?");
+    $stmt->bind_param("i", $id);
+    $stmt->execute();
+
+    $stmt = $mysqli->prepare("DELETE FROM stavke_mamci WHERE id_rezervacije = ?");
+    $stmt->bind_param("i", $id);
+    $stmt->execute();
+
+    $stmt = $mysqli->prepare("DELETE FROM rezervacije WHERE id_rezervacije = ?");
+    $stmt->bind_param("i", $id);
+    $result = $stmt->execute();
+
     if ($result) {
         header("Location: admin_rezervacije.php?msg=obrisano");
     } else {
-        header("Location: admin_rezervacije.php?msg=greska&error=" . urlencode($mysqli->error));
+        header("Location: admin_rezervacije.php?msg=greska");
     }
     exit();
 }
 
 // ===== PROMJENA STATUSA =====
-if (isset($_GET['promijeni']) && isset($_GET['id']) && isset($_GET['status'])) {
-    $id = (int)$_GET['id'];
-    $status = $_GET['status'];
+if (isset($_POST['promijeni']) && isset($_POST['id']) && isset($_POST['status'])) {
+    provjeriCSRF();
+    $id = (int)$_POST['id'];
+    $status = $_POST['status'];
     $admin = $_SESSION['admin_ime'];
-    
+
+    // Bijela lista dozvoljenih statusa - sprječava nevažeće vrijednosti
+    if (!in_array($status, ['potvrđeno', 'otkazano', 'na čekanju'], true)) {
+        header("Location: admin_rezervacije.php?msg=greska");
+        exit();
+    }
+
     // DOHVATI RAZLOG AKO POSTOJI
     $razlog = '';
-    if ($status == 'otkazano' && isset($_GET['razlog'])) {
-        $razlog = trim($_GET['razlog']);
+    if ($status == 'otkazano' && isset($_POST['razlog'])) {
+        $razlog = trim($_POST['razlog']);
     }
     
     $old = $mysqli->query("SELECT status FROM rezervacije WHERE id_rezervacije = $id");
@@ -229,7 +267,7 @@ if (isset($_GET['promijeni']) && isset($_GET['id']) && isset($_GET['status'])) {
         posaljiEmailPotvrda($mysqli, $id, $status, $razlog);
     }
     
-    header("Location: admin_rezervacije.php" . (isset($_GET['return_filters']) ? $_GET['return_filters'] : ''));
+    header("Location: admin_rezervacije.php");
     exit();
 }
 
@@ -242,10 +280,12 @@ $filter_datum_do = isset($_GET['datum_do']) ? $_GET['datum_do'] : '';
 // Dohvati sve lokacije za filter
 $sve_lokacije = $mysqli->query("SELECT id_lokacije, naziv FROM lokacije WHERE aktivno = 1 ORDER BY naziv");
 
-// Gradi SQL upit s filterima - DODAJ razlog_otkazivanja
-$sql = "SELECT r.*, l.naziv AS lokacija_naziv, r.razlog_otkazivanja
+// Gradi SQL upit s filterima - DODAJ razlog_otkazivanja i noćni paket
+$sql = "SELECT r.*, l.naziv AS lokacija_naziv, r.razlog_otkazivanja,
+               n.naziv AS nocni_naziv, n.cijena AS nocni_cijena
         FROM rezervacije r
         JOIN lokacije l ON r.id_lokacije = l.id_lokacije
+        LEFT JOIN nocni_ribolov n ON r.id_paketa_nocni = n.id_paketa
         WHERE 1=1";
 $params = [];
 $types = "";
@@ -283,8 +323,8 @@ if (!empty($params)) {
     $rezervacije = $mysqli->query($sql);
 }
 
-// Statistike s filterima
-$stats_sql = "SELECT 
+// Statistike s filterima (prepared statement - bez SQL injectiona)
+$stats_sql = "SELECT
     COUNT(*) AS ukupno,
     SUM(CASE WHEN status = 'na čekanju' THEN 1 ELSE 0 END) AS cekanje,
     SUM(CASE WHEN status = 'potvrđeno' THEN 1 ELSE 0 END) AS potvrdeno,
@@ -292,11 +332,32 @@ $stats_sql = "SELECT
 FROM rezervacije r
 JOIN lokacije l ON r.id_lokacije = l.id_lokacije
 WHERE 1=1";
-if (!empty($filter_lokacija)) $stats_sql .= " AND r.id_lokacije = $filter_lokacija";
-if (!empty($filter_datum_od)) $stats_sql .= " AND r.datum_rezervacije >= '$filter_datum_od'";
-if (!empty($filter_datum_do)) $stats_sql .= " AND r.datum_rezervacije <= '$filter_datum_do'";
+$stats_params = [];
+$stats_types = "";
+if (!empty($filter_lokacija)) {
+    $stats_sql .= " AND r.id_lokacije = ?";
+    $stats_params[] = $filter_lokacija;
+    $stats_types .= "i";
+}
+if (!empty($filter_datum_od)) {
+    $stats_sql .= " AND r.datum_rezervacije >= ?";
+    $stats_params[] = $filter_datum_od;
+    $stats_types .= "s";
+}
+if (!empty($filter_datum_do)) {
+    $stats_sql .= " AND r.datum_rezervacije <= ?";
+    $stats_params[] = $filter_datum_do;
+    $stats_types .= "s";
+}
 
-$stats = $mysqli->query($stats_sql)->fetch_assoc();
+if (!empty($stats_params)) {
+    $stmt_stats = $mysqli->prepare($stats_sql);
+    $stmt_stats->bind_param($stats_types, ...$stats_params);
+    $stmt_stats->execute();
+    $stats = $stmt_stats->get_result()->fetch_assoc();
+} else {
+    $stats = $mysqli->query($stats_sql)->fetch_assoc();
+}
 
 // Poruka
 $poruka = '';
@@ -309,15 +370,6 @@ if (isset($_GET['msg'])) {
     }
 }
 
-// Funkcija za zadržavanje filtera u URL-u
-function keepFilters() {
-    $filters = [];
-    if (!empty($_GET['status'])) $filters[] = 'status=' . urlencode($_GET['status']);
-    if (!empty($_GET['lokacija'])) $filters[] = 'lokacija=' . urlencode($_GET['lokacija']);
-    if (!empty($_GET['datum_od'])) $filters[] = 'datum_od=' . urlencode($_GET['datum_od']);
-    if (!empty($_GET['datum_do'])) $filters[] = 'datum_do=' . urlencode($_GET['datum_do']);
-    return !empty($filters) ? '&' . implode('&', $filters) : '';
-}
 ?>
 <!DOCTYPE html>
 <html lang="hr">
@@ -562,9 +614,10 @@ function keepFilters() {
             gap: 8px;
             flex-wrap: wrap;
         }
-        .btn-approve { background: #27ae60; color: white; padding: 5px 12px; border-radius: 6px; text-decoration: none; font-size: 12px; }
-        .btn-cancel { background: #e74c3c; color: white; padding: 5px 12px; border-radius: 6px; text-decoration: none; font-size: 12px; }
-        .btn-delete { background: #7f8c8d; color: white; padding: 5px 12px; border-radius: 6px; text-decoration: none; font-size: 12px; }
+        .btn-approve, .btn-cancel, .btn-delete { padding: 5px 12px; border-radius: 6px; text-decoration: none; font-size: 12px; border: none; cursor: pointer; color: white; font-family: inherit; }
+        .btn-approve { background: #27ae60; }
+        .btn-cancel { background: #e74c3c; }
+        .btn-delete { background: #7f8c8d; }
         .btn-pdf {
             background: #e74c3c;
             color: white;
@@ -694,7 +747,7 @@ function keepFilters() {
                             <td colspan="10">📭 Nema rezervacija za prikaz</td>
                         </tr>
                     <?php else: ?>
-                        <?php while ($r = $rezervacije->fetch_assoc()): 
+                        <?php while ($r = $rezervacije->fetch_assoc()):
                             // Dohvati dodatne usluge za UKUPNU CIJENU
                             $usluge_sql = $mysqli->query("SELECT SUM(kolicina * cijena_po_komadu) as ukupno FROM stavke_usluga WHERE id_rezervacije = " . $r['id_rezervacije']);
                             $ukupno_usluge = 0;
@@ -702,15 +755,16 @@ function keepFilters() {
                                 $usluge_row = $usluge_sql->fetch_assoc();
                                 $ukupno_usluge = $usluge_row['ukupno'] ?? 0;
                             }
-                            $ukupna_cijena = ($r['broj_osoba'] * $r['cijena_po_osobi']) + $ukupno_usluge;
+                            $cijena_nocni = $r['nocni_cijena'] ?? 0;
+                            $ukupna_cijena = ($r['broj_osoba'] * $r['cijena_po_osobi']) + $cijena_nocni + $ukupno_usluge;
                         ?>
                         <tr>
                             <td>#<?php echo $r['id_rezervacije']; ?></td>
                             <td><?php echo date('d.m.Y.', strtotime($r['datum_rezervacije'])); ?></td>
                             <td><?php echo htmlspecialchars($r['lokacija_naziv']); ?></td>
                             <td><?php echo htmlspecialchars($r['ime_prezime']); ?></td>
-                            <td><?php echo $r['broj_mobitela']; ?></td>
-                            <td><?php echo $r['email'] ?: '-'; ?></td>
+                            <td><?php echo htmlspecialchars($r['broj_mobitela']); ?></td>
+                            <td><?php echo htmlspecialchars($r['email'] ?: '-'); ?></td>
                             <td><?php echo $r['broj_osoba']; ?></td>
                             <td><strong><?php echo number_format($ukupna_cijena, 2); ?> €</strong></td>
                             <td class="status-cell">
@@ -728,22 +782,28 @@ function keepFilters() {
                             </td>
                             <td class="action-buttons">
                                 <?php if ($r['status'] == 'na čekanju'): ?>
-                                    <a href="?promijeni=1&id=<?php echo $r['id_rezervacije']; ?>&status=potvrđeno<?php echo keepFilters(); ?>" 
-                                       class="btn-approve" onclick="return confirm('Potvrdi rezervaciju #<?php echo $r['id_rezervacije']; ?>?')">
-                                       ✅ Potvrdi
-                                    </a>
-                                    <a href="javascript:void(0);" 
-                                       class="btn-cancel" 
-                                       onclick="otkaziRezervaciju(<?php echo $r['id_rezervacije']; ?>, '<?php echo addslashes($r['ime_prezime']); ?>')">
-                                       ❌ Otkaži
-                                    </a>
+                                    <form method="POST" style="display:inline" onsubmit="return confirm('Potvrdi rezervaciju #<?php echo $r['id_rezervacije']; ?>?')">
+                                        <input type="hidden" name="csrf_token" value="<?php echo $admin_csrf; ?>">
+                                        <input type="hidden" name="promijeni" value="1">
+                                        <input type="hidden" name="id" value="<?php echo $r['id_rezervacije']; ?>">
+                                        <input type="hidden" name="status" value="potvrđeno">
+                                        <button type="submit" class="btn-approve">✅ Potvrdi</button>
+                                    </form>
+                                    <form method="POST" style="display:inline" onsubmit="return otkaziRezervaciju(this, <?php echo $r['id_rezervacije']; ?>, '<?php echo htmlspecialchars(addslashes($r['ime_prezime']), ENT_QUOTES); ?>')">
+                                        <input type="hidden" name="csrf_token" value="<?php echo $admin_csrf; ?>">
+                                        <input type="hidden" name="promijeni" value="1">
+                                        <input type="hidden" name="id" value="<?php echo $r['id_rezervacije']; ?>">
+                                        <input type="hidden" name="status" value="otkazano">
+                                        <input type="hidden" name="razlog" value="">
+                                        <button type="submit" class="btn-cancel">❌ Otkaži</button>
+                                    </form>
                                 <?php endif; ?>
-                                <a href="?obrisi=<?php echo $r['id_rezervacije']; ?>" 
-                                   class="btn-delete"
-                                   onclick="return confirm('⚠️ SIGURNO? Obrisati rezervaciju #<?php echo $r['id_rezervacije']; ?>?')">
-                                   🗑️ Obriši
-                                </a>
-                                <a href="../pdf_generator.php?id=<?php echo $r['id_rezervacije']; ?>" 
+                                <form method="POST" style="display:inline" onsubmit="return confirm('⚠️ SIGURNO? Obrisati rezervaciju #<?php echo $r['id_rezervacije']; ?>?')">
+                                    <input type="hidden" name="csrf_token" value="<?php echo $admin_csrf; ?>">
+                                    <input type="hidden" name="obrisi" value="<?php echo $r['id_rezervacije']; ?>">
+                                    <button type="submit" class="btn-delete">🗑️ Obriši</button>
+                                </form>
+                                <a href="../pdf_generator.php?id=<?php echo $r['id_rezervacije']; ?>"
                                    class="btn-pdf" target="_blank">
                                    📄 PDF
                                 </a>
@@ -757,14 +817,15 @@ function keepFilters() {
     </div>
     
     <script>
-    function otkaziRezervaciju(id, ime) {
+    function otkaziRezervaciju(form, id, ime) {
         var razlog = prompt("❌ Otkazivanje rezervacije #" + id + "\nKorisnik: " + ime + "\n\nUnesite razlog otkazivanja:");
-        
-        if (razlog !== null && razlog.trim() !== "") {
-            window.location.href = "?promijeni=1&id=" + id + "&status=otkazano&razlog=" + encodeURIComponent(razlog) + "<?php echo keepFilters(); ?>";
-        } else if (razlog !== null) {
+        if (razlog === null) return false;
+        if (razlog.trim() === "") {
             alert("Morate unijeti razlog otkazivanja!");
+            return false;
         }
+        form.razlog.value = razlog;
+        return true;
     }
     </script>
 </body>

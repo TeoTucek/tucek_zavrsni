@@ -2,7 +2,7 @@
 // =====================================================
 // pdf_generator.php - Jednostavna verzija (ne treba TCPDF)
 // =====================================================
-
+session_start();
 require_once 'spoji.php';
 
 if (!isset($_GET['id']) || empty($_GET['id'])) {
@@ -11,25 +11,39 @@ if (!isset($_GET['id']) || empty($_GET['id'])) {
 
 $id_rezervacije = (int)$_GET['id'];
 
-// Dohvati podatke o rezervaciji
-$rez = $mysqli->query("
-    SELECT r.*, l.naziv AS lokacija_naziv 
+// Dohvati podatke o rezervaciji (prepared - sprječava SQL injection)
+$stmt = $mysqli->prepare("
+    SELECT r.*, l.naziv AS lokacija_naziv
     FROM rezervacije r
     JOIN lokacije l ON r.id_lokacije = l.id_lokacije
-    WHERE r.id_rezervacije = $id_rezervacije
+    WHERE r.id_rezervacije = ?
 ");
+$stmt->bind_param("i", $id_rezervacije);
+$stmt->execute();
+$rez = $stmt->get_result();
 
-// Provjeri da li rezervacija postoji
+// Provjeri postojanje prije autorizacije (da se ne razlikuje 404 od 403)
 if (!$rez || $rez->num_rows == 0) {
+    http_response_code(404);
     die("Rezervacija #$id_rezervacije ne postoji!");
 }
+$r_data = $rez->fetch_assoc();
 
-$r = $rez->fetch_assoc();
+// AUTORIZACIJA: ili je korisnik admin, ili je rezervacija upravo napravljena u istoj sesiji
+$je_admin = !empty($_SESSION['admin_id']);
+$vlastita = !empty($_SESSION['moje_rezervacije']) && in_array($id_rezervacije, $_SESSION['moje_rezervacije']);
+
+if (!$je_admin && !$vlastita) {
+    http_response_code(403);
+    die("Nemate pravo pristupa ovoj rezervaciji.");
+}
+
+$r = $r_data;
 
 // Dohvati tip ulaznice (ako postoji)
 $naziv_tipa = "R23";
 if (!empty($r['id_tipa_ulaznice'])) {
-    $tip = $mysqli->query("SELECT naziv FROM tipovi_ulaznica WHERE id_tipa = " . $r['id_tipa_ulaznice']);
+    $tip = $mysqli->query("SELECT naziv FROM tipovi_ulaznica WHERE id_tipa = " . (int)$r['id_tipa_ulaznice']);
     if ($tip && $tip->num_rows > 0) {
         $naziv_tipa = $tip->fetch_assoc()['naziv'];
     }
@@ -37,22 +51,28 @@ if (!empty($r['id_tipa_ulaznice'])) {
 
 // Dohvati noćni ribolov (ako postoji)
 $nocni_tekst = "";
+$cijena_nocni = 0;
 if (!empty($r['id_paketa_nocni'])) {
-    $noc = $mysqli->query("SELECT naziv FROM nocni_ribolov WHERE id_paketa = " . $r['id_paketa_nocni']);
+    $noc = $mysqli->query("SELECT naziv, cijena FROM nocni_ribolov WHERE id_paketa = " . (int)$r['id_paketa_nocni']);
     if ($noc && $noc->num_rows > 0) {
-        $nocni_tekst = $noc->fetch_assoc()['naziv'];
+        $noc_row = $noc->fetch_assoc();
+        $nocni_tekst = $noc_row['naziv'];
+        $cijena_nocni = $noc_row['cijena'];
     }
 }
 
 // Dohvati dodatne usluge
 $usluge_lista = [];
 $ukupno_usluge = 0;
-$usluge = $mysqli->query("
+$stmt_u = $mysqli->prepare("
     SELECT u.naziv, s.kolicina, s.cijena_po_komadu
     FROM stavke_usluga s
     JOIN dodatne_usluge u ON s.id_usluge = u.id_usluge
-    WHERE s.id_rezervacije = $id_rezervacije
+    WHERE s.id_rezervacije = ?
 ");
+$stmt_u->bind_param("i", $id_rezervacije);
+$stmt_u->execute();
+$usluge = $stmt_u->get_result();
 
 if ($usluge && $usluge->num_rows > 0) {
     while ($u = $usluge->fetch_assoc()) {
@@ -63,7 +83,7 @@ if ($usluge && $usluge->num_rows > 0) {
 }
 
 // Ukupna cijena
-$ukupno = ($r['broj_osoba'] * $r['cijena_po_osobi']) + $ukupno_usluge;
+$ukupno = ($r['broj_osoba'] * $r['cijena_po_osobi']) + $cijena_nocni + $ukupno_usluge;
 
 // =====================================================
 // GENERIRANJE HTML ZA PRINT/PDF
@@ -190,7 +210,7 @@ header('Content-Type: text/html; charset=utf-8');
             <tr><td><strong>Tip ulaznice:</strong></td><td><?php echo $naziv_tipa; ?> (<?php echo number_format($r['cijena_po_osobi'] ?? 0, 2); ?> €/osobi)</td></tr>
             <tr><td><strong>Broj osoba:</strong></td><td><?php echo $r['broj_osoba'] ?? 1; ?></td></tr>
             <?php if ($nocni_tekst): ?>
-            <tr><td><strong>Noćni ribolov:</strong></td><td><?php echo $nocni_tekst; ?></td></tr>
+            <tr><td><strong>Noćni ribolov:</strong></td><td><?php echo htmlspecialchars($nocni_tekst); ?> (<?php echo number_format($cijena_nocni, 2); ?> €)</td></tr>
             <?php endif; ?>
         </table>
         

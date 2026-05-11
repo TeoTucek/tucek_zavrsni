@@ -1,14 +1,19 @@
 <?php
 // =====================================================
-// SPOJI.PHP - Spajanje na bazu (ISPRAVLJENO!)
+// SPOJI.PHP - Spajanje na bazu
+// Konfiguracija dolazi iz config.php (nije u git-u)
 // =====================================================
 
-$host = 'localhost';
-$baza = 'ribolov_rezervacije';
-$user = 'root';
-$pass = '';
+$config_path = __DIR__ . '/config.php';
+if (!file_exists($config_path)) {
+    die("<div style='background:#f8d7da;padding:20px;'>
+            <h2>❌ config.php ne postoji!</h2>
+            <p>Kopiraj config.example.php u config.php i popuni vrijednosti.</p>
+         </div>");
+}
+require_once $config_path;
 
-$mysqli = new mysqli($host, $user, $pass, $baza);
+$mysqli = new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME);
 
 if ($mysqli->connect_error) {
     die("<div style='background: #f8d7da; padding: 20px;'>

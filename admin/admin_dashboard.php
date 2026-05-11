@@ -357,7 +357,7 @@ $zadnje_rez = $mysqli->query("
         <div class="admin-header">
             <h1>Admin panel</h1>
             <div class="admin-user">
-                <span><?php echo $_SESSION['admin_ime']; ?></span>
+                <span><?php echo htmlspecialchars($_SESSION['admin_ime']); ?></span>
                 <a href="admin_logout.php" class="logout-btn">
                     🚪 Odjava
                 </a>
@@ -426,7 +426,7 @@ $zadnje_rez = $mysqli->query("
                         <tr>
                             <td>#<?php echo $r['id_rezervacije']; ?></td>
                             <td><?php echo date('d.m.Y.', strtotime($r['datum_rezervacije'])); ?></td>
-                            <td><?php echo $r['lokacija']; ?></td>
+                            <td><?php echo htmlspecialchars($r['lokacija']); ?></td>
                             <td><?php echo htmlspecialchars($r['ime_prezime']); ?></td>
                             <td>
                                 <span class="status-badge status-<?php 

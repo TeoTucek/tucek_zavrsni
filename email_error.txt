@@ -1,3 +1,4 @@
 2026-03-31 13:55:06 - Greška: SMTP Error: Could not authenticate.
 2026-03-31 13:58:44 - Greška: SMTP Error: Could not authenticate.
 2026-03-31 19:27:20 - Greška: SMTP Error: Could not authenticate.
+2026-04-27 11:16:45 - Greška: SMTP Error: Could not connect to SMTP host. Failed to connect to server SMTP server error: Failed to connect to server SMTP code: 10060 Additional SMTP info: A connection attempt failed because the connected party did not properly respond after a period of time, or established connection failed because connected host has failed to respond

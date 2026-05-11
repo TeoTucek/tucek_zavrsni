@@ -43,13 +43,64 @@ $email = $_POST['email'] ?? '';
 $broj_osoba = (int)$_POST['broj_osoba'];
 $napomena = $_POST['napomena'] ?? '';
 
-// Dohvati naziv lokacije
-$lok = $mysqli->query("SELECT naziv FROM lokacije WHERE id_lokacije = $id_lokacije");
-$naziv_lokacije = $lok->fetch_assoc()['naziv'];
+// Validacija datuma - format YYYY-MM-DD i ne smije biti u prošlosti
+$d = DateTime::createFromFormat('Y-m-d', $datum);
+if (!$d || $d->format('Y-m-d') !== $datum) {
+    header("Location: index.php?status=greska");
+    exit();
+}
+$danas = new DateTime('today');
+if ($d < $danas) {
+    header("Location: index.php?status=greska");
+    exit();
+}
 
-// Dohvati tip ulaznice i cijenu
-$tip = $mysqli->query("SELECT naziv, cijena FROM tipovi_ulaznica WHERE id_tipa = $id_tipa_ulaznice");
-$tip_podaci = $tip->fetch_assoc();
+// Validacija emaila
+if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+    header("Location: index.php?status=greska");
+    exit();
+}
+
+// Dohvati lokaciju (naziv, kapacitet) - validacija u istom koraku
+$stmt = $mysqli->prepare("SELECT naziv, kapacitet FROM lokacije WHERE id_lokacije = ? AND aktivno = 1");
+$stmt->bind_param("i", $id_lokacije);
+$stmt->execute();
+$lok_res = $stmt->get_result();
+if ($lok_res->num_rows === 0) {
+    header("Location: index.php?status=greska");
+    exit();
+}
+$lok_row = $lok_res->fetch_assoc();
+$naziv_lokacije = $lok_row['naziv'];
+$kapacitet = (int)$lok_row['kapacitet'];
+
+// Provjera kapaciteta - korisnik ne smije zaobići HTML max preko Postmana
+if ($broj_osoba < 1 || $broj_osoba > $kapacitet) {
+    header("Location: index.php?status=greska");
+    exit();
+}
+
+// Provjera blokiranih datuma (i globalnih i specifičnih za lokaciju)
+$stmt = $mysqli->prepare("SELECT id_blokade FROM blokirani_datumi
+                          WHERE (id_lokacije = ? OR id_lokacije IS NULL)
+                          AND ? BETWEEN datum_od AND datum_do");
+$stmt->bind_param("is", $id_lokacije, $datum);
+$stmt->execute();
+if ($stmt->get_result()->num_rows > 0) {
+    header("Location: index.php?status=blokirano");
+    exit();
+}
+
+// Dohvati tip ulaznice i cijenu (validira i da tip postoji)
+$stmt = $mysqli->prepare("SELECT naziv, cijena FROM tipovi_ulaznica WHERE id_tipa = ? AND aktivan = 1");
+$stmt->bind_param("i", $id_tipa_ulaznice);
+$stmt->execute();
+$tip_res = $stmt->get_result();
+if ($tip_res->num_rows === 0) {
+    header("Location: index.php?status=greska");
+    exit();
+}
+$tip_podaci = $tip_res->fetch_assoc();
 $naziv_tipa = $tip_podaci['naziv'];
 $cijena_tipa = $tip_podaci['cijena'];
 
@@ -57,11 +108,17 @@ $cijena_tipa = $tip_podaci['cijena'];
 $nocni_tekst = "";
 $cijena_nocni = 0;
 if ($id_paketa_nocni) {
-    $noc = $mysqli->query("SELECT naziv, cijena FROM nocni_ribolov WHERE id_paketa = $id_paketa_nocni");
-    if ($noc && $noc->num_rows > 0) {
-        $noc_podaci = $noc->fetch_assoc();
+    $stmt = $mysqli->prepare("SELECT naziv, cijena FROM nocni_ribolov WHERE id_paketa = ? AND aktivan = 1");
+    $stmt->bind_param("i", $id_paketa_nocni);
+    $stmt->execute();
+    $noc_res = $stmt->get_result();
+    if ($noc_res->num_rows > 0) {
+        $noc_podaci = $noc_res->fetch_assoc();
         $nocni_tekst = $noc_podaci['naziv'];
         $cijena_nocni = $noc_podaci['cijena'];
+    } else {
+        // Korisnik je poslao nepostojeci paket - ignoriraj umjesto pucanja
+        $id_paketa_nocni = null;
     }
 }
 
@@ -95,16 +152,22 @@ if ($stmt->get_result()->num_rows > 0) {
 }
 
 // Spremi rezervaciju
-$stmt = $mysqli->prepare("INSERT INTO rezervacije 
-    (id_lokacije, datum_rezervacije, ime_prezime, broj_mobitela, email, broj_osoba, cijena_po_osobi, napomena) 
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+$stmt = $mysqli->prepare("INSERT INTO rezervacije
+    (id_lokacije, id_tipa_ulaznice, id_paketa_nocni, datum_rezervacije, ime_prezime, broj_mobitela, email, broj_osoba, cijena_po_osobi, napomena)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
 
-$stmt->bind_param("issssids", 
-    $id_lokacije, $datum, $ime, $mobitel, $email, $broj_osoba, $cijena_tipa, $napomena
+$stmt->bind_param("iiissssids",
+    $id_lokacije, $id_tipa_ulaznice, $id_paketa_nocni, $datum, $ime, $mobitel, $email, $broj_osoba, $cijena_tipa, $napomena
 );
 
 if ($stmt->execute()) {
     $id_rezervacije = $mysqli->insert_id;
+
+    // Zapamti u sesiji da je ova rezervacija "vlastita" - za pristup PDF-u
+    if (!isset($_SESSION['moje_rezervacije'])) {
+        $_SESSION['moje_rezervacije'] = [];
+    }
+    $_SESSION['moje_rezervacije'][] = $id_rezervacije;
     
     // ===== ===== ===== ===== ===== ===== ===== ===== =====
     // ===== SPREMANJE DODATNIH USLUGA U BAZU =====
@@ -124,22 +187,18 @@ if ($stmt->execute()) {
     
     // ===== SLANJE EMAILA =====
     if (!empty($email)) {
-        
-        $tvoj_email = "rezervacije.koncanica@gmail.com";
-        $tvoja_lozinka = "hodslnmvpearyjbw";  // BEZ RAZMAKA!
-        
         $mail = new PHPMailer(true);
-        
+
         try {
             $mail->isSMTP();
-            $mail->Host = 'smtp.gmail.com';
+            $mail->Host = SMTP_HOST;
             $mail->SMTPAuth = true;
-            $mail->Username = $tvoj_email;
-            $mail->Password = $tvoja_lozinka;
+            $mail->Username = SMTP_USER;
+            $mail->Password = SMTP_PASS;
             $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
-            $mail->Port = 587;
-            
-            $mail->setFrom($tvoj_email, 'Ribnjacarstvo Koncanica');
+            $mail->Port = SMTP_PORT;
+
+            $mail->setFrom(SMTP_USER, SMTP_FROM_NAME);
             $mail->addAddress($email, $ime);
             
             $mail->isHTML(true);
